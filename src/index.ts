@@ -1,9 +1,10 @@
 import * as file2html from 'file2html';
 import * as mime from 'file2html/lib/mime';
-import {readArchive, Archive, ArchiveEntry} from 'file2html-archive-tools';
-import {folderName as picturesFolderName, parsePictures} from './pictures';
+import {Archive, ArchiveEntry, readArchive} from 'file2html-archive-tools';
+import {folderName as picturesFolderName, oebpsFolderName as oebpsPicturesFolderName, parsePictures} from './pictures';
 import {folderName as fontsFolderName, parseFonts} from './fonts';
 import parseCSS from './parse-css';
+import {resolveCSSRelations, resolveHTMLRelations} from './relations';
 
 const supportedMimeTypes: string[] = [mime.lookup('.epub')];
 
@@ -11,9 +12,9 @@ export interface Relations {
     [key: string]: string;
 }
 
-const pageBodyBeginPattern: RegExp = /<body[^>]*>/;
-const pageBodyEndPattern: RegExp = /<\/body/;
-const htmlSourcePattern: RegExp = /src="((images|fonts)\/.+)"/g;
+const pageBodyPattern: RegExp = /<body[^>]*>|<\/body>/;
+const pageStylePattern: RegExp = /<style[^>]*>|<\/style>/;
+const relativeHeightAttributePattern: RegExp = /(height="[0-9]+%?")/g;
 
 export default class EPUBReader extends file2html.Reader {
     read ({fileInfo}: file2html.ReaderParams) {
@@ -32,10 +33,35 @@ export default class EPUBReader extends file2html.Reader {
             }, fileInfo.meta);
             let styles: string = '';
             let content: string = '';
+            let isOEBPS: boolean = false;
+            let isOPS: boolean = false;
+            const {files} = archive;
+
+            for (const filename in files) {
+                if (files.hasOwnProperty(filename)) {
+                    if (filename.indexOf('OEBPS/') >= 0) {
+                        isOEBPS = true;
+                        break;
+                    }
+
+                    if (filename.indexOf('OPS/') >= 0) {
+                        isOPS = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!isOEBPS && !isOPS) {
+                return Promise.reject(new Error('Invalid file format')) as any;
+            }
+
+            const picturesFolder: Archive = archive.folder(
+                isOEBPS ? `OEBPS/${ oebpsPicturesFolderName }` : `OPS/${ picturesFolderName }`
+            );
 
             return Promise.all([
-                parsePictures(archive.folder(`OPS/${ picturesFolderName }`)),
-                parseFonts(archive.folder(`OPS/${ fontsFolderName }`))
+                parsePictures(picturesFolder, {isOEBPS}),
+                isOEBPS ? {} : parseFonts(archive.folder(`OPS/${ fontsFolderName }`))
             ]).then((relationsGroups: Relations[]) => {
                 const relations: Relations = {};
                 const queue: Promise<void>[] = [];
@@ -44,38 +70,50 @@ export default class EPUBReader extends file2html.Reader {
 
                 archive.forEach((relativePath: string, file: ArchiveEntry) => {
                     if (relativePath.indexOf('css/') >= 0) {
-                        queue.push(parseCSS(file, relations).then((css: string) => {
-                            styles += `${ css }\n`;
+                        queue.push(file.async('string').then((css: string) => {
+                            styles += `${ parseCSS(css, relations) }\n`;
                         }));
-                    } else if (relativePath.indexOf('.xhtml') > 0 && relativePath.indexOf('TOC.xhtml') < 0) {
-                        queue.push(file.async('string').then((html: string) => {
-                            const pageBodyBeginMatch: RegExpMatchArray = html.match(pageBodyBeginPattern);
+                    } else {
+                        const isXHTMLContentFile: boolean = (
+                            relativePath.indexOf('.xhtml') > 0 && relativePath.indexOf('TOC.xhtml') < 0
+                        );
+                        const isPageFile: boolean = isOEBPS ? (
+                            relativePath.indexOf('content/') >= 0 && (
+                                relativePath.indexOf('.xml') > 0 || isXHTMLContentFile
+                            )
+                        ) : isXHTMLContentFile;
 
-                            if (!pageBodyBeginMatch) {
-                                return;
-                            }
+                        if (isPageFile) {
+                            queue.push(file.async('string').then((html: string) => {
+                                let htmlWithoutStyles: string = '';
 
-                            const pageBodyEndMatch: RegExpMatchArray = html.match(pageBodyEndPattern);
+                                html.split(pageStylePattern).forEach((code: string) => {
+                                    if (code[0] === '<') {
+                                        htmlWithoutStyles += code;
+                                    } else {
+                                        styles += `${ parseCSS(code, relations) }\n`;
+                                    }
+                                });
 
-                            if (!pageBodyEndMatch) {
-                                return;
-                            }
+                                const body: string = htmlWithoutStyles.split(pageBodyPattern)[1];
 
-                            const pageName: string = relativePath.split('/').pop().split('.')[0];
-
-                            content += `<div id="${ pageName }">${ html.slice(
-                                pageBodyBeginMatch.index + pageBodyBeginMatch[0].length,
-                                pageBodyEndMatch.index
-                            ).replace(htmlSourcePattern, (_input: string, ...args: any[]) => {
-                                const src: string = relations[args[0]];
-
-                                if (src) {
-                                    return `src="${ src }"`;
+                                if (!body) {
+                                    return;
                                 }
 
-                                return '';
-                            }) }</div>`;
-                        }));
+                                const pageName: string = relativePath.split('/').pop().split('.')[0];
+
+                                relativeHeightAttributePattern.lastIndex = 0;
+
+                                content += `<div id="${ pageName }">${ resolveCSSRelations(
+                                    resolveHTMLRelations(
+                                        body.replace(relativeHeightAttributePattern, 'data-$1'),
+                                        relations
+                                    ),
+                                    relations
+                                ) }</div>`;
+                            }));
+                        }
                     }
                 });
 
