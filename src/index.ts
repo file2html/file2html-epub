@@ -52,7 +52,9 @@ export default class EPUBReader extends file2html.Reader {
             }
 
             if (!isOEBPS && !isOPS) {
-                return Promise.reject(new Error('Invalid file format')) as any;
+                const archiveTree: string = Object.keys(archive).join(',\n');
+
+                return Promise.reject(new Error(`Invalid file format. Archive: [${ archiveTree }]`)) as any;
             }
 
             const picturesFolder: Archive = archive.folder(
