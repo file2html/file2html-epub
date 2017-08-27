@@ -1,5 +1,6 @@
 import * as file2html from 'file2html';
 import * as mime from 'file2html/lib/mime';
+import {errorsNamespace} from 'file2html/lib/errors';
 import {Archive, ArchiveEntry, readArchive} from 'file2html-archive-tools';
 import {folderName as picturesFolderName, oebpsFolderName as oebpsPicturesFolderName, parsePictures} from './pictures';
 import {folderName as fontsFolderName, parseFonts} from './fonts';
@@ -31,11 +32,19 @@ export default class EPUBReader extends file2html.Reader {
                 createdAt: '',
                 modifiedAt: ''
             }, fileInfo.meta);
+            const {files} = archive;
             let styles: string = '';
             let content: string = '';
             let isOEBPS: boolean = false;
             let isOPS: boolean = false;
-            const {files} = archive;
+
+            function getInvalidFileError () {
+                const archiveTree: string = Object.keys(files || {}).join(',\n');
+
+                return Promise.reject(new Error(
+                    `${ errorsNamespace }.invalidFile. Archive: [${ archiveTree }]`
+                )) as any;
+            }
 
             for (const filename in files) {
                 if (files.hasOwnProperty(filename)) {
@@ -52,9 +61,7 @@ export default class EPUBReader extends file2html.Reader {
             }
 
             if (!isOEBPS && !isOPS) {
-                const archiveTree: string = Object.keys(archive).join(',\n');
-
-                return Promise.reject(new Error(`Invalid file format. Archive: [${ archiveTree }]`)) as any;
+                return getInvalidFileError();
             }
 
             const picturesFolder: Archive = archive.folder(
