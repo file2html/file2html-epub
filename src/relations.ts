@@ -4,7 +4,6 @@ const htmlSourcePattern: RegExp = /(:href|href|src)="([^"]+)"/g;
 const cssSourcePattern: RegExp = /url\(([^)]+)\)/g;
 const endQuotesPattern: RegExp = /["']$/;
 const startQuotesPattern: RegExp = /^["']/;
-const relativePathBeginPattern: RegExp = /^[\.\/]+/g;
 
 /**
  * @description According to the version of WPUB relationPath might be:
@@ -15,7 +14,7 @@ const relativePathBeginPattern: RegExp = /^[\.\/]+/g;
  * @returns {string}
  */
 function getRelation (relations: Relations, relationPath: string): string {
-    const relationId: string = relationPath.replace(relativePathBeginPattern, '');
+    const relationId: string = relationPath.split('/').pop();
 
     return relations[relationId];
 }
